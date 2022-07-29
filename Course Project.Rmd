@@ -1,0 +1,183 @@
+---
+title: "Predicting Correct Barbell-Lift Form using HAR Data"
+author: "Stacey Farr"
+date: "`r Sys.Date()`"
+output: html_document  
+---  
+
+## Executive Summary  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In one study, 6 participants were asked to perform barbell lifts in 5 different ways, one correct and 4 incorrect. This project will use the data collected for that study to create a model that can predict whether a person is correctly performing barbell lifts. 
+
+## Data Download and Transformation
+
+[Training data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)  
+
+[Test data](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)  
+
+[Here is a link](http://web.archive.org/web/20170519033209/http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf) to the study that collected the data. The full citation is below:  
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Getting and Transforming the Data
+
+**Note: Libraries and code used for this project can be found in the Appendix.**\
+```{r libraries, include-FALSE}
+library(caret)
+library(gbm)
+library(randomForest)
+library(tidyverse)
+```
+Download the test and training csv files. 
+
+```{r data, include=FALSE}
+HARtraindata <- read.csv("pml-training.csv")
+HARtestdata <-read.csv("pml-testing.csv")
+str(HARtraindata[,c(1:10,12:16,160)])
+```
+The training data has 19,622 observations and 160 variables (a sample of the str() output is above). The variable we are trying to predict is the classe variable, and it can have one of 5 values - "A" thru "E" (classe type "A" indicates a lift that was done correctly). Note there are several columns with a majority of NA's and blanks. Also, columns 1 - 7 have identifying and timing data that is irrelevant to the classe, so they will be removed before fitting the models. In addition, only sensors that have a complete set of observations will be used to predict classe, so columns with all NA's and blanks will be dropped as well. **Only the training data will be changed.**
+
+The test data set has 20 observations and 160 variables. This dataset does not have the classe variable. Instead, it has a variable named "problem_id" that corresponds to a question number on the Quiz.  
+
+```{r findnas}
+colnas <- unique(which(is.na(HARtraindata),arr.ind=TRUE)[,2])##Returns column indexes
+traindata <- subset(HARtraindata,select=-colnas) ##Remove columns with NAs
+cblk <- which(colSums(traindata=="")==0) ##Returns blank column indexes
+traindata <- subset(traindata,select=cblk) ##Remove columns with blanks
+traindata <- traindata[,c(8:60)] ##Remove first 7 columns
+```
+
+## Creating and Comparing Models  
+
+I will split the training data into three partitions: training, testing, and validation. The training data will be used to train the models, and the testing data will be used to check the accuracy of those models. The validation data will be set aside and used to evaluate the final model's performance when given new data. 
+
+```{r splitsets}
+set.seed(1234)
+inBuild <- createDataPartition(y=traindata$classe,p=0.7,list=FALSE)
+validation<-traindata[-inBuild,]
+buildData <- traindata[inBuild,]
+inTrain <- createDataPartition(y=buildData$classe, p=.6,list=FALSE)
+training <- buildData[inTrain,]
+testing <- buildData[-inTrain,]
+```
+
+The first model I will try is a random forest model using 10-fold cross validation. All 52 variables will be used as predictors for classe. 
+
+```{r rfmodels, cache=TRUE}
+set.seed(1631)
+fitrf <- train(classe~.,data=training,method="rf",ntrees=200,trControl=trainControl(method="cv",number=10))
+```
+
+```{r rfresults}
+fitrf$results
+```
+
+```{r varImpplot}
+varImpPlot(fitrf$finalModel)
+```
+Because there are a lot of predictors used in this model, it's accuracy may be the result of overfitting. According to the results, an mtry of 27 had the best accuracy. The plot above shows the top 30 variables in importance. I am going to create a new model using 27 of those variables to see how accuracy is affected.  
+
+```{r varimp}
+vimp <- varImp(fitrf$finalModel)
+vimp <- arrange(vimp,desc(Overall)) 
+vnames <- row.names(vimp)
+vnames <- vnames[c(1:27)]##put top 27 rownames into char. vector
+newtraindata <- subset(training,select=vnames)
+newtraindata <- cbind(newtraindata,classe=training$classe) ##add classe to new data set
+```
+
+```{r newrf, cache=TRUE} 
+##Random Forest on top 27 variables
+newrf <- train(classe~.,method="rf",data=newtraindata,ntrees=200,trControl=trainControl(method="cv",number=10))
+```
+
+```{r newrfresults}
+newrf$results
+```
+The model with fewer predictors actually performed slightly better. Since simpler is better, I will use this version of the RF model to predict classe.  
+
+Now, I will fit a GBM classifier using 27 variables and 10-fold cross validation. Let's see how its in-sample accuracy compares to the random forest model. 
+```{r gbm, include=FALSE}
+fitgbm <- train(classe~.,method="gbm", data=newtraindata, trControl=trainControl(method="cv",number=10))
+```
+
+```{r gbmresults}
+fitgbm
+```
+The GBM model is not as Accurate as the new RF model, but it is close. Let's see how they perform with new data.  
+
+## Predictions Using Testing Data  
+The testing data that was split from the original training data set will be used to compare the models' out-of-sample accuracy  
+
+```{r predict}
+predrf <- predict(newrf,testing)
+predgbm<- predict(fitgbm,testing)
+
+```
+
+```{r evaluate}
+predrfdf <- data.frame(obs=factor(testing$classe),pred=predrf)
+```
+
+New RF Results using Test Data  
+/newline
+```{r NewRFTest}
+defaultSummary(predrfdf)
+```
+
+```{r GBMtest}
+predgbmdf <- data.frame(obs=factor(testing$classe), pred=predgbm)
+```
+
+GBM Model Results Using Test Data  
+/newline
+```{r GBMTestResult}
+defaultSummary(predgbmdf)
+```
+
+Once again, there is very little difference in the two models. There is not much gain to be made by further tweaking the models, so I will use the validation data set to do a final comparison.
+```{r validation}
+predrfval <- predict(newrf,validation)
+predgbmval <- predict(fitgbm,validation)
+```
+
+New RF Results using Validation Data  
+/newline
+```{r RFvalidation}
+defaultSummary(data.frame(obs=factor(validation$classe),pred=predrfval))
+```
+
+GBM Results using Validation Data  
+/newline
+```{r GBMvalidation}
+defaultSummary(data.frame(obs=factor(validation$classe),pred=predgbmval))
+```
+
+
+## Predicting classe of Original Test Data  
+Out of curiosity, I will use both models to predict the classe of the test cases. The accuracy for both is extremely high so I suspect there will be very little difference in the predictions, if any. However, only the predictions from the random forest model will be used for the Quiz.  
+Let's see the results.
+
+```{r finaltest}
+rftest <- predict(newrf,HARtestdata)
+gbmtest <- predict(fitgbm,HARtestdata)
+finalpreds <- data.frame(RF=rftest,GBM=gbmtest)
+
+finalpreds <- cbind(finalpreds,Qnum=HARtestdata$problem_id)
+knitr::kable(finalpreds, caption="Final Predictions")
+```
+
+## Conclusion  
+Although the Random Forest model using 27 predictors has higher in-sample accuracy than the GBM model, they agree on all 20 test case predictions. This leads me to believe that they will perform equally well when given new data. 
+
+## Appendix  
+ 
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
+
+ 
+
+ 
