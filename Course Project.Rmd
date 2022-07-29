@@ -24,7 +24,8 @@ knitr::opts_chunk$set(echo = FALSE)
 ## Getting and Transforming the Data
 
 **Note: Libraries and code used for this project can be found in the Appendix.**\
-```{r libraries, include-FALSE}
+```{r libraries, include=FALSE}
+## LIBRARIES
 library(caret)
 library(gbm)
 library(randomForest)
@@ -32,7 +33,8 @@ library(tidyverse)
 ```
 Download the test and training csv files. 
 
-```{r data, include=FALSE}
+```{r data}
+## DATA
 HARtraindata <- read.csv("pml-training.csv")
 HARtestdata <-read.csv("pml-testing.csv")
 str(HARtraindata[,c(1:10,12:16,160)])
@@ -42,6 +44,7 @@ The training data has 19,622 observations and 160 variables (a sample of the str
 The test data set has 20 observations and 160 variables. This dataset does not have the classe variable. Instead, it has a variable named "problem_id" that corresponds to a question number on the Quiz.  
 
 ```{r findnas}
+## REMOVE UNNECESSARY COLUMNS
 colnas <- unique(which(is.na(HARtraindata),arr.ind=TRUE)[,2])##Returns column indexes
 traindata <- subset(HARtraindata,select=-colnas) ##Remove columns with NAs
 cblk <- which(colSums(traindata=="")==0) ##Returns blank column indexes
@@ -54,6 +57,7 @@ traindata <- traindata[,c(8:60)] ##Remove first 7 columns
 I will split the training data into three partitions: training, testing, and validation. The training data will be used to train the models, and the testing data will be used to check the accuracy of those models. The validation data will be set aside and used to evaluate the final model's performance when given new data. 
 
 ```{r splitsets}
+## SPLIT INTO SETS
 set.seed(1234)
 inBuild <- createDataPartition(y=traindata$classe,p=0.7,list=FALSE)
 validation<-traindata[-inBuild,]
@@ -66,20 +70,25 @@ testing <- buildData[-inTrain,]
 The first model I will try is a random forest model using 10-fold cross validation. All 52 variables will be used as predictors for classe. 
 
 ```{r rfmodels, cache=TRUE}
+## RANDOM FOREST
 set.seed(1631)
 fitrf <- train(classe~.,data=training,method="rf",ntrees=200,trControl=trainControl(method="cv",number=10))
 ```
 
 ```{r rfresults}
+## RF RESULTS
 fitrf$results
 ```
 
 ```{r varImpplot}
+## IMPORTANT VARIABLE PLOT
 varImpPlot(fitrf$finalModel)
 ```
-Because there are a lot of predictors used in this model, it's accuracy may be the result of overfitting. According to the results, an mtry of 27 had the best accuracy. The plot above shows the top 30 variables in importance. I am going to create a new model using 27 of those variables to see how accuracy is affected.  
+  
+The model is a little more than 98% accurate with an mtry of 27. Random Forest algorithms with cross-validation are not prone to overfitting, but I still want to reduce the number of predictors due to complexity and processing time. The plot above shows 30 variables in order of importance. Since Accuracy is best when mtry is 27, I will use the top 27 to create a new model. 
 
 ```{r varimp}
+## CHOOSE ONLY TOP 27 VARIABLES
 vimp <- varImp(fitrf$finalModel)
 vimp <- arrange(vimp,desc(Overall)) 
 vnames <- row.names(vimp)
@@ -89,40 +98,45 @@ newtraindata <- cbind(newtraindata,classe=training$classe) ##add classe to new d
 ```
 
 ```{r newrf, cache=TRUE} 
-##Random Forest on top 27 variables
+## RANDOM FOREST WITH 27 PREDICTORS
 newrf <- train(classe~.,method="rf",data=newtraindata,ntrees=200,trControl=trainControl(method="cv",number=10))
 ```
 
 ```{r newrfresults}
+## NEW RF RESULTS
 newrf$results
 ```
-The model with fewer predictors actually performed slightly better. Since simpler is better, I will use this version of the RF model to predict classe.  
+The model with fewer predictors actually performed slightly better, but not by much (98.3% vs 98.4%). Since simpler models are preferred, I will use the new RF model for predictions.  
 
-Now, I will fit a GBM classifier using 27 variables and 10-fold cross validation. Let's see how its in-sample accuracy compares to the random forest model. 
+For comparison, I will fit a GBM classifier using 27 variables and 10-fold cross validation. Let's see how its in-sample accuracy compares to the random forest model. 
 ```{r gbm, include=FALSE}
+## GBM WITH 27 PREDICTORS
 fitgbm <- train(classe~.,method="gbm", data=newtraindata, trControl=trainControl(method="cv",number=10))
 ```
 
 ```{r gbmresults}
+## GBM RESULTS
 fitgbm
 ```
-The GBM model is not as Accurate as the new RF model, but it is close. Let's see how they perform with new data.  
+The GBM model is not as Accurate as the new RF model, but it is close at 95%. Let's see how each performs with new data.  
 
 ## Predictions Using Testing Data  
 The testing data that was split from the original training data set will be used to compare the models' out-of-sample accuracy  
 
 ```{r predict}
+## PREDICTIONS ON TEST SET
 predrf <- predict(newrf,testing)
 predgbm<- predict(fitgbm,testing)
 
 ```
 
 ```{r evaluate}
+## EVALUATE PREDICTIONS
 predrfdf <- data.frame(obs=factor(testing$classe),pred=predrf)
 ```
 
-New RF Results using Test Data  
-/newline
+RF Results using Test Data  
+
 ```{r NewRFTest}
 defaultSummary(predrfdf)
 ```
@@ -131,36 +145,40 @@ defaultSummary(predrfdf)
 predgbmdf <- data.frame(obs=factor(testing$classe), pred=predgbm)
 ```
 
-GBM Model Results Using Test Data  
-/newline
+GBM Results Using Test Data  
+
 ```{r GBMTestResult}
 defaultSummary(predgbmdf)
 ```
 
-Once again, there is very little difference in the two models. There is not much gain to be made by further tweaking the models, so I will use the validation data set to do a final comparison.
+Once again, there is very little difference in the two models; and both actually did slightly better with the new data. There is not much gain to be made by further tweaking the models, so I will use the validation data set to do a final comparison.
 ```{r validation}
+## PREDICT USING VALIDATION SET
 predrfval <- predict(newrf,validation)
 predgbmval <- predict(fitgbm,validation)
 ```
 
-New RF Results using Validation Data  
-/newline
+RF Results using Validation Data  
+
 ```{r RFvalidation}
+## EVALUATE VALIDATION PREDICTIONS
 defaultSummary(data.frame(obs=factor(validation$classe),pred=predrfval))
 ```
 
 GBM Results using Validation Data  
-/newline
+
 ```{r GBMvalidation}
 defaultSummary(data.frame(obs=factor(validation$classe),pred=predgbmval))
 ```
 
+Once again, both models improved slightly: Random Forest improved to almost 99%, and GBM increased to almost 96%.
 
 ## Predicting classe of Original Test Data  
 Out of curiosity, I will use both models to predict the classe of the test cases. The accuracy for both is extremely high so I suspect there will be very little difference in the predictions, if any. However, only the predictions from the random forest model will be used for the Quiz.  
 Let's see the results.
 
 ```{r finaltest}
+## PREDICTING TEST CASES
 rftest <- predict(newrf,HARtestdata)
 gbmtest <- predict(fitgbm,HARtestdata)
 finalpreds <- data.frame(RF=rftest,GBM=gbmtest)
@@ -170,9 +188,9 @@ knitr::kable(finalpreds, caption="Final Predictions")
 ```
 
 ## Conclusion  
-Although the Random Forest model using 27 predictors has higher in-sample accuracy than the GBM model, they agree on all 20 test case predictions. This leads me to believe that they will perform equally well when given new data. 
+Although the Random Forest model using 27 predictors has higher in-sample accuracy than the GBM model, they agree on all 20 test case predictions. This leads me to believe that they will perform equally well when given new data. The models improved with every new set of data, so I expect that the predictions on the test data will be 99% accurate.
 
-## Appendix  
+## Appendix Code Used  
  
 ```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
 
